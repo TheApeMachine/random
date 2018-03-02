@@ -4,38 +4,59 @@ module Api
 
   def self.included(base)
     base.class_eval do
-      def self.all(options={})
-        object = self.to_s.underscore.downcase
+      def self.build_request(object, options={}, body={})
+        object    = object.to_s.underscore.downcase
+        base_path = "#{ENV["API_PATH"]}/#{object.pluralize}"
 
         if options.present?
-          option_string = '?' + options.map{|key, value| [key, value].join('=')}.join('&')
+          option_string = '?' + options.select{
+            |key, value| key.to_s != 'id'
+          }.map{
+            |key, value| [key, value].join('=')
+          }.join('&')
         else
           option_string = ''
         end
 
-        response = HTTParty.get("#{ENV["API_PATH"]}/#{object.pluralize}.json#{option_string}")
+        if options[:id].present?
+          url = "#{base_path}/#{options[:id]}.json#{option_string}"
+        else
+          url = "#{base_path}.json#{option_string}"
+        end
 
-        return response[object.pluralize].map{|r| self.new(r)}
+        if body.present?
+          result = HTTParty.put(url, body: {
+            object.to_sym => body
+          }.to_json, headers: {
+            'Content-Type' => 'application/json'
+          })
+        else
+          result = HTTParty.get(url)
+        end
+
+        return {
+          object: object,
+          result: result
+        }
+      end
+
+      def self.all(options={})
+        response = build_request(self, options)
+
+        return response[:result][
+          response[:object].pluralize
+        ].map{|r| self.new(r)}
       end
 
       def self.find(id)
-        object   = self.to_s.underscore.downcase
-        response = HTTParty.get("#{ENV["API_PATH"]}/#{object.pluralize}/#{id}.json")
-
-        return self.new(response[object])
+        response = build_request(self, {id: id})
+        return self.new(response[:result][response[:object]])
       end
     end
   end
 
   def save
-    object = self.class.to_s.downcase
-
-    response = HTTParty.post("#{ENV["API_PATH"]}/#{object.pluralize}.json",
-      body: {
-        object.to_sym => self
-      }.to_json, headers: {
-      'Content-Type' => 'application/json'
-    })
+    response = self.class.build_request(self.class, {}, self)
 
     if response["status"] == 201
       return self.class.new(response[object].merge(status: 201))
@@ -45,13 +66,7 @@ module Api
   end
 
   def update(params)
-    object = self.class.to_s.underscore.downcase
-
-    response = HTTParty.put("#{ENV["API_PATH"]}/#{object.pluralize}/#{self.id}.json", body: {
-      object.to_sym => params
-    }.to_json, headers: {
-      'Content-Type' => 'application/json'
-    })
+    response = self.class.build_request(self.class, {id: self.id}, params)
 
     if response["status"] == 202
       return self.class.new(response[object])
@@ -61,13 +76,7 @@ module Api
   end
 
   def destroy(params=nil)
-    object = self.class.to_s.underscore.downcase
-
-    response = HTTParty.delete("#{ENV["API_PATH"]}/#{object.pluralize}/#{self.id}.json", body: {
-      object.to_sym => params
-    }.to_json, headers: {
-      'Content-Type' => 'application/json'
-    })
+    response = self.class.build_request(self.class, {id: self.id}, params)
 
     if response["status"] == 203
       return true
